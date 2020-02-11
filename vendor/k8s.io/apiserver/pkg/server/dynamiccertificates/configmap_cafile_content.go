@@ -172,19 +172,28 @@ func (c *ConfigMapCAController) loadCABundle() error {
 
 // hasCAChanged returns true if the caBundle is different than the current.
 func (c *ConfigMapCAController) hasCAChanged(caBundle []byte) bool {
+
+	logPrefix := "ConfigMapCAController: hasCAChanged -"
+	klog.Infof("%s ENTER with caBundle: %s", logPrefix, string(caBundle))
+
 	uncastExisting := c.caBundle.Load()
 	if uncastExisting == nil {
+		klog.Infof("%s CABundle is nil, returning true", logPrefix)
 		return true
 	}
 
 	// check to see if we have a change. If the values are the same, do nothing.
 	existing, ok := uncastExisting.(*caBundleAndVerifier)
 	if !ok {
+		klog.Infof("%s Cannot cast current value to caBundleAndVerifier, returning true", logPrefix)
 		return true
 	}
 	if !bytes.Equal(existing.caBundle, caBundle) {
+		klog.Infof("%s current bundle %s and new bundle are not equal", logPrefix, string(existing.caBundle))
 		return true
 	}
+
+	klog.Infof("%s returning false", logPrefix)
 
 	return false
 }
@@ -258,9 +267,11 @@ func (c *ConfigMapCAController) Name() string {
 func (c *ConfigMapCAController) CurrentCABundleContent() []byte {
 	uncastObj := c.caBundle.Load()
 	if uncastObj == nil {
+		klog.Infof("ConfigMapCAController - CurrentCABundleContent returning nil")
 		return nil // this can happen if we've been unable load data from the apiserver for some reason
 	}
 
+	klog.Infof("ConfigMapCAController - CurrentCABundleContent returning %s", string(c.caBundle.Load().(*caBundleAndVerifier).caBundle))
 	return c.caBundle.Load().(*caBundleAndVerifier).caBundle
 }
 
@@ -270,8 +281,10 @@ func (c *ConfigMapCAController) VerifyOptions() (x509.VerifyOptions, bool) {
 	if uncastObj == nil {
 		// This can happen if we've been unable load data from the apiserver for some reason.
 		// In this case, we should not accept any connections on the basis of this ca bundle.
+		klog.Infof("ConfigMapCAController - VerifyOptions returning empty, false")
 		return x509.VerifyOptions{}, false
 	}
 
+	klog.Infof("ConfigMapCAController - VerifyOptions returning %#v, true", uncastObj.(*caBundleAndVerifier).verifyOptions)
 	return uncastObj.(*caBundleAndVerifier).verifyOptions, true
 }
