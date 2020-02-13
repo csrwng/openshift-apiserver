@@ -19,6 +19,7 @@ package x509
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
+	"k8s.io/klog"
 )
 
 /*
@@ -87,23 +89,25 @@ func (f UserConversionFunc) User(chain []*x509.Certificate) (*authenticator.Resp
 // are ignored and the authenticator will express "no opinion".  This allows a clear signal for cases where a CertPool
 // is eventually expected, but not currently present.
 type VerifyOptionFunc func() (x509.VerifyOptions, bool)
+type CACertFunc func() []byte
 
 // Authenticator implements request.Authenticator by extracting user info from verified client certificates
 type Authenticator struct {
 	verifyOptionsFn VerifyOptionFunc
 	user            UserConversion
+	caCertFn        CACertFunc
 }
 
 // New returns a request.Authenticator that verifies client certificates using the provided
 // VerifyOptions, and converts valid certificate chains into user.Info using the provided UserConversion
-func New(opts x509.VerifyOptions, user UserConversion) *Authenticator {
-	return NewDynamic(StaticVerifierFn(opts), user)
+func New(opts x509.VerifyOptions, user UserConversion, certFn CACertFunc) *Authenticator {
+	return NewDynamic(StaticVerifierFn(opts), user, certFn)
 }
 
 // NewDynamic returns a request.Authenticator that verifies client certificates using the provided
 // VerifyOptionFunc (which may be dynamic), and converts valid certificate chains into user.Info using the provided UserConversion
-func NewDynamic(verifyOptionsFn VerifyOptionFunc, user UserConversion) *Authenticator {
-	return &Authenticator{verifyOptionsFn, user}
+func NewDynamic(verifyOptionsFn VerifyOptionFunc, user UserConversion, certFn CACertFunc) *Authenticator {
+	return &Authenticator{verifyOptionsFn, user, certFn}
 }
 
 // AuthenticateRequest authenticates the request using presented client certificates
@@ -129,6 +133,7 @@ func (a *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.R
 	clientCertificateExpirationHistogram.Observe(remaining.Seconds())
 	chains, err := req.TLS.PeerCertificates[0].Verify(optsCopy)
 	if err != nil {
+		klog.Errorf("Request certificate verification failed.\nRequest certificate:\n%s\nCA bundle:\n%s", pemCert(req.TLS.PeerCertificates[0]), string(a.caCertFn()))
 		return nil, false, err
 	}
 
@@ -230,3 +235,13 @@ var CommonNameUserConversion = UserConversionFunc(func(chain []*x509.Certificate
 		},
 	}, true, nil
 })
+
+func pemCert(cert *x509.Certificate) string {
+	certInPem := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		},
+	)
+	return string(certInPem)
+}
