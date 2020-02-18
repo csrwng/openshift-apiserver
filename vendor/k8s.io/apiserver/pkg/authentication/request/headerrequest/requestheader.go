@@ -141,6 +141,7 @@ func NewSecure(clientCA string, proxyClientNames []string, nameHeaders []string,
 
 	return NewDynamicVerifyOptionsSecure(
 		x509request.StaticVerifierFn(opts),
+		func() []byte { return []byte("STATIC-2") },
 		StaticStringSlice(proxyClientNames),
 		StaticStringSlice(trimmedNameHeaders),
 		StaticStringSlice(trimmedGroupHeaders),
@@ -148,10 +149,10 @@ func NewSecure(clientCA string, proxyClientNames []string, nameHeaders []string,
 	), nil
 }
 
-func NewDynamicVerifyOptionsSecure(verifyOptionFn x509request.VerifyOptionFunc, proxyClientNames, nameHeaders, groupHeaders, extraHeaderPrefixes StringSliceProvider) authenticator.Request {
+func NewDynamicVerifyOptionsSecure(verifyOptionFn x509request.VerifyOptionFunc, caFn x509request.CACertFunc, proxyClientNames, nameHeaders, groupHeaders, extraHeaderPrefixes StringSliceProvider) authenticator.Request {
 	headerAuthenticator := NewDynamic(nameHeaders, groupHeaders, extraHeaderPrefixes)
 
-	return x509request.NewDynamicCAVerifier(verifyOptionFn, headerAuthenticator, proxyClientNames)
+	return x509request.NewDynamicCAVerifier(verifyOptionFn, caFn, headerAuthenticator, proxyClientNames)
 }
 
 func (a *requestHeaderAuthRequestHandler) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {

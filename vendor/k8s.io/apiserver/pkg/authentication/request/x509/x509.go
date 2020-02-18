@@ -17,6 +17,7 @@ limitations under the License.
 package x509
 
 import (
+	"bytes"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -133,7 +134,7 @@ func (a *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.R
 	clientCertificateExpirationHistogram.Observe(remaining.Seconds())
 	chains, err := req.TLS.PeerCertificates[0].Verify(optsCopy)
 	if err != nil {
-		klog.Errorf("Request certificate verification failed.\nRequest certificate:\n%s\nCA bundle:\n%s", pemCert(req.TLS.PeerCertificates[0]), string(a.caCertFn()))
+		klog.Errorf("Authenticator: request certificate verification failed.\nRequest certificate:\n%s\nCA bundle:\n%s", pemCert(req.TLS.PeerCertificates), string(a.caCertFn()))
 		return nil, false, err
 	}
 
@@ -155,6 +156,7 @@ func (a *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.R
 // Verifier implements request.Authenticator by verifying a client cert on the request, then delegating to the wrapped auth
 type Verifier struct {
 	verifyOptionsFn VerifyOptionFunc
+	caFn            CACertFunc
 	auth            authenticator.Request
 
 	// allowedCommonNames contains the common names which a verified certificate is allowed to have.
@@ -164,13 +166,13 @@ type Verifier struct {
 
 // NewVerifier create a request.Authenticator by verifying a client cert on the request, then delegating to the wrapped auth
 func NewVerifier(opts x509.VerifyOptions, auth authenticator.Request, allowedCommonNames sets.String) authenticator.Request {
-	return NewDynamicCAVerifier(StaticVerifierFn(opts), auth, StaticStringSlice(allowedCommonNames.List()))
+	return NewDynamicCAVerifier(StaticVerifierFn(opts), func() []byte { return []byte("STATIC") }, auth, StaticStringSlice(allowedCommonNames.List()))
 }
 
 // NewDynamicCAVerifier create a request.Authenticator by verifying a client cert on the request, then delegating to the wrapped auth
 // TODO make the allowedCommonNames dynamic
-func NewDynamicCAVerifier(verifyOptionsFn VerifyOptionFunc, auth authenticator.Request, allowedCommonNames StringSliceProvider) authenticator.Request {
-	return &Verifier{verifyOptionsFn, auth, allowedCommonNames}
+func NewDynamicCAVerifier(verifyOptionsFn VerifyOptionFunc, caFn CACertFunc, auth authenticator.Request, allowedCommonNames StringSliceProvider) authenticator.Request {
+	return &Verifier{verifyOptionsFn, caFn, auth, allowedCommonNames}
 }
 
 // AuthenticateRequest verifies the presented client certificate, then delegates to the wrapped auth
@@ -193,9 +195,11 @@ func (a *Verifier) AuthenticateRequest(req *http.Request) (*authenticator.Respon
 	}
 
 	if _, err := req.TLS.PeerCertificates[0].Verify(optsCopy); err != nil {
+		klog.Errorf("Verifier: request certificate verification failed.\nRequest certificate:\n%s\nCA bundle:\n%s", pemCert(req.TLS.PeerCertificates), string(a.caFn()))
 		return nil, false, err
 	}
 	if err := a.verifySubject(req.TLS.PeerCertificates[0].Subject); err != nil {
+		klog.Errorf("Verifier: subject verification failed.\nRequest subject:\n%s\nAllowed common names:\n%v", pemCert(req.TLS.PeerCertificates), a.allowedCommonNames.Value())
 		return nil, false, err
 	}
 	return a.auth.AuthenticateRequest(req)
@@ -236,12 +240,16 @@ var CommonNameUserConversion = UserConversionFunc(func(chain []*x509.Certificate
 	}, true, nil
 })
 
-func pemCert(cert *x509.Certificate) string {
-	certInPem := pem.EncodeToMemory(
-		&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.Raw,
-		},
-	)
-	return string(certInPem)
+func pemCert(certs []*x509.Certificate) string {
+	b := &bytes.Buffer{}
+	for _, c := range certs {
+		certInPem := pem.EncodeToMemory(
+			&pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: c.Raw,
+			},
+		)
+		b.Write(certInPem)
+	}
+	return b.String()
 }
